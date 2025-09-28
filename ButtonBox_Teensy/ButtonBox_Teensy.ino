@@ -1,14 +1,12 @@
-#include <LittleFS.h>
+#include <SD.h>
 
 #define configStructByteLength (sizeof(configStruct::buttonID) + sizeof(configStruct::buttonConfigMask) + sizeof(configStruct::groupID))
 #define numberOfPossibleButtons 21
 
 const uint16_t ledPinMap[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
-const uint16_t buttonPinMap[] = {21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42};
+const uint16_t buttonPinMap[] = {21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41};
 
-LittleFS_SPIFlash fs;
-
-const int chipSelect = 6; 
+const int chipSelect = 1; 
 
 const char *filepath = "/config";
 
@@ -45,7 +43,7 @@ class Button {
     bool buttonSticky;
     bool buttonLightsUp;
     bool isPOVAngle;
-    bool isJoysickAngle;
+    bool isJoystickAngle;
     bool signalInverted;
     bool buttonBeginsOn;
     bool unused2;
@@ -56,10 +54,18 @@ class Button {
 
     void begin() {
       pinMode(ledPinMap[buttonID], OUTPUT);
+      Serial.printf("setting pin %i to OUTPUT\n", ledPinMap[buttonID]);
+      pinMode(buttonPinMap[buttonID], INPUT);
+      Serial.printf("setting pin %i to INPUT\n", buttonPinMap[buttonID]);
+      if (buttonBeginsOn) {
+        buttonOn = true;
+        buttonLightOn = (buttonLightsUp) & !buttonLightOn;
+        digitalWrite(ledPinMap[buttonID], buttonLightOn ? HIGH : LOW);
+      }
       if (buttonSticky) {
-        attachInterrupt(digitalPinToInterrupt(buttonID), Button::staticHandleInterrupt, RISING);
+        attachInterrupt(digitalPinToInterrupt(buttonPinMap[buttonID]), Button::staticHandleInterrupt, RISING);
       } else {
-        attachInterrupt(digitalPinToInterrupt(buttonID), Button::staticHandleInterrupt, CHANGE);
+        attachInterrupt(digitalPinToInterrupt(buttonPinMap[buttonID]), Button::staticHandleInterrupt, CHANGE);
       }
     }
 
@@ -95,28 +101,24 @@ void setup() {
 
   Serial.println("\n" __FILE__ " " __DATE__ " " __TIME__);
 
-  Serial.print("Initializing LittleFS ...");
+  Serial.print("Initializing SD ...");
 
-  // see if the Flash is present and can be initialized:
-  // Note:  SPI is default so if you are using SPI and not SPI for instance
-  //        you can just specify myfs.begin(chipSelect). 
-  if (!fs.begin(chipSelect)) {
-    Serial.printf("Error starting %s\n", "SPI FLASH");
-    while (1) {
-      // Error, so don't do anything more - stay stuck here
-    }
-  }
-  Serial.println("LittleFS initialized.");
+  SD.begin(BUILTIN_SDCARD);
+
+  Serial.println("SD initialized.");
 
   for (uint i = 0; i < numberOfPossibleButtons; i++) {
-    config[i] = {static_cast<decltype(configStruct::buttonID)>(i), 0};
+    config[i] = {static_cast<decltype(configStruct::buttonID)>(i), 0, 0};
   }
 
-  if (!fs.exists(filepath)) {
+  if (!SD.exists(filepath)) {
     Serial.println("config file does not already exist");
     initializeConfigIDs();
     goto createAndPopulateFile;
   }
+
+  configFile = SD.open(filepath);
+  Serial.printf("%i", configFile.size());
 
   if (configFile.size() < (numberOfPossibleButtons * configStructByteLength)) {
     createAndPopulateFile:
@@ -126,7 +128,7 @@ void setup() {
 
   if (configFile.size() > (numberOfPossibleButtons * configStructByteLength)) {
     Serial.println("config file invalid. generating new file");
-    fs.remove(filepath);
+    SD.remove(filepath);
     writeToConfigFile(filepath, config);
   }
 
@@ -147,7 +149,7 @@ void loop() {
 }
 
 void writeToConfigFile(const char* fileName, configStruct config[]) {
-  File file = fs.open(fileName, FILE_WRITE);
+  File file = SD.open(fileName, FILE_WRITE);
 
   uint8_t buffer[numberOfPossibleButtons * configStructByteLength];
   for (uint buttonConfig = 0; buttonConfig < sizeof(buffer); buttonConfig += configStructByteLength) {
@@ -169,28 +171,26 @@ void writeToConfigFile(const char* fileName, configStruct config[]) {
 
 void readFileToConfig(const char* fileName) {
 
-  File file = fs.open(fileName, FILE_READ);
+  File file = SD.open(fileName, FILE_READ);
 
   // read file contents and populate config with information
   for (uint i = 0; i < (numberOfPossibleButtons * configStructByteLength); i += configStructByteLength) {
     configStruct buffer;
-    file.seek(i * configStructByteLength);
+    file.seek(i);
     file.read(&buffer.buttonID, sizeof(buffer.buttonID));
 
-    file.seek((i * configStructByteLength) + sizeof(buffer.buttonID));
+    file.seek((i) + sizeof(buffer.buttonID));
     file.read(&buffer.groupID, sizeof(buffer.groupID));
 
-    file.seek((i * configStructByteLength) + sizeof(buffer.buttonID) + sizeof(buffer.groupID));
+    file.seek((i) + sizeof(buffer.buttonID) + sizeof(buffer.groupID));
     file.read(&buffer.buttonConfigMask, sizeof(buffer.buttonConfigMask));
 
     Serial.print("button ");
-    Serial.print(i);
+    Serial.print(i/configStructByteLength);
     Serial.print(" config buffer: ");
-    Serial.print(buffer.buttonID, HEX);
-    Serial.print(" ");
-    Serial.print(buffer.groupID, HEX);
-    Serial.print(" ");
-    Serial.print(buffer.buttonConfigMask, HEX);
+    Serial.printf("%X ", buffer.buttonID);
+    Serial.printf("%X ", buffer.groupID);
+    Serial.printf("%X ", buffer.buttonConfigMask);
     Serial.println();
 
     config[i / configStructByteLength] = buffer;
@@ -206,15 +206,21 @@ void readFileToConfig(const char* fileName) {
     button.buttonSticky   = (buttonConfig.buttonConfigMask & 0b00000010) >> 1;
     button.buttonLightsUp = (buttonConfig.buttonConfigMask & 0b00000100) >> 2;
     button.isPOVAngle     = (buttonConfig.buttonConfigMask & 0b00001000) >> 3;
-    button.isJoysickAngle = (buttonConfig.buttonConfigMask & 0b00010000) >> 4;
+    button.isJoystickAngle = (buttonConfig.buttonConfigMask & 0b00010000) >> 4;
     button.signalInverted = (buttonConfig.buttonConfigMask & 0b00100000) >> 5;
     button.buttonBeginsOn = (buttonConfig.buttonConfigMask & 0b01000000) >> 6;
     button.unused2        = (buttonConfig.buttonConfigMask & 0b10000000) >> 7;
 
-    if (button.buttonBeginsOn) {
-      button.buttonOn = true;
-      button.buttonLightOn = button.buttonBeginsOn & button.buttonLightsUp;
-    }
+    Serial.printf("button %i: ", i);
+    Serial.printf("buttonID - %i | ", button.buttonID);
+    Serial.printf("buttonActive = %d | ", button.buttonActive);
+    Serial.printf("buttonSticky = %d | ", button.buttonSticky);
+    Serial.printf("buttonLightsUp = %d | ", button.buttonLightsUp);
+    Serial.printf("isPOVAngle = %d | ", button.isPOVAngle);
+    Serial.printf("isJoystickAngle = %d | ", button.isJoystickAngle);
+    Serial.printf("signalInverted = %d | ", button.signalInverted);
+    Serial.printf("buttonBeginsOn = %d | ", button.buttonBeginsOn);
+    Serial.printf("unused = %d\n", button.unused2);
   }
 
   file.close();
