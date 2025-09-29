@@ -12,6 +12,8 @@ const char *filepath = "/config";
 
 File configFile;
 
+bool programmingMode = false;
+
 /* 0000000x = is button active
 / 000000x0 = is button sticky
 / 00000x00 = does button light up
@@ -146,6 +148,80 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
+
+  if (programmingMode) {
+    // programming mode code here
+
+    if ((Serial.available() >= 0) && (uint)Serial.available() <= ((configStructByteLength * 2) + 2 /*add 2 for the two required "/"'s in the programming command*/)) {
+
+      if (Serial.available() == 2) {
+        char stringBuffer[2];
+        Serial.readBytes(stringBuffer, 2);
+
+        if (strcmp(stringBuffer , "!q")) {
+          Serial.println("Exiting Programming Mode");
+          readFileToConfig(filepath);
+          exitProgrammingMode();
+          return;
+        } else if (strcmp(stringBuffer , "q")) {
+          exitProgrammingMode();
+          return;
+        }
+      }
+
+      char buttonIDBuffer[sizeof(configStruct::buttonID)];
+      char groupIDBuffer[sizeof(configStruct::groupID)];
+      char configMaskBuffer[sizeof(configStruct::buttonConfigMask)];
+
+      decltype(configStruct::buttonID) buttonID;
+
+      Serial.readBytesUntil(0x2F, buttonIDBuffer, sizeof(configStruct::buttonID) + 1); 
+      Serial.readBytesUntil(0x2F, groupIDBuffer, sizeof(configStruct::groupID) + 1);
+      Serial.readBytesUntil(0x0A, configMaskBuffer, sizeof(configStruct::buttonConfigMask)+ 1);
+
+      sscanf(buttonIDBuffer, "%x", &buttonID);
+      sscanf(groupIDBuffer, "%x", &(config[buttonID].groupID));
+      sscanf(configMaskBuffer, "%x", &(config[buttonID].buttonConfigMask));
+    }
+    
+  } else {
+    if (Serial.available() == 0) {
+      interrupts();
+      return;
+    }
+
+    if (Serial.available() > 4) {
+      Serial.print("Too many characters in command");
+      return;
+    }
+
+    noInterrupts();
+
+    if (Serial.read() == 0x2F) {              // checking for "/" to start reading command
+      switch (Serial.read()) {
+        case -1:                              // checking for empty buffer, which means no command was input past "/"
+
+          Serial.println("invalid input");
+          return;
+
+        case 0x48:                            // checking for lowercase "h"
+        case 0x68:                            // chacking for uppercase "H"
+          // print list of commands here
+          break;
+
+        case 0x50:
+        case 0x70:
+          programmingMode = true;
+          break;
+      }
+    }
+  }
+
+}
+
+void exitProgrammingMode() {
+  writeToConfigFile(filepath, config);
+  programmingMode = false;
 }
 
 void writeToConfigFile(const char* fileName, configStruct config[]) {
