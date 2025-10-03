@@ -30,13 +30,18 @@ struct configStruct {
   char buttonConfigMask;
 } config[numberOfPossibleButtons];
 
+struct buttonGroup {
+  decltype(configStruct::buttonID) currentActiveButton;
+} buttonGroups[255];
+
 class Button {
   public:
+
+    static Button* _instance;
+
     Button() {
       _instance = this;
     }
-
-    static Button* _instance;
 
     // button settings
     uint16_t buttonID;
@@ -53,22 +58,45 @@ class Button {
     // button state
     bool buttonOn;
     bool buttonLightOn;
+    int previousCheck = LOW;
+    elapsedMillis elapsedMillis = new::elapsedMillis();
 
     void begin() {
       pinMode(ledPinMap[buttonID], OUTPUT);
       Serial.printf("setting pin %i to OUTPUT\n", ledPinMap[buttonID]);
-      pinMode(buttonPinMap[buttonID], INPUT);
+      pinMode(buttonPinMap[buttonID], INPUT_PULLDOWN);
       Serial.printf("setting pin %i to INPUT\n", buttonPinMap[buttonID]);
       if (buttonBeginsOn) {
         buttonOn = true;
         buttonLightOn = (buttonLightsUp) & !buttonLightOn;
         digitalWrite(ledPinMap[buttonID], buttonLightOn ? HIGH : LOW);
+        Joystick.button(buttonID, buttonOn);
+      }
+    }
+
+    void checkForInterrupts() {
+      if (elapsedMillis < 15) {
+        return;
+      }
+      int newCheck = digitalRead(buttonPinMap[buttonID]);
+      if ((groupID != 0) && (buttonGroups[groupID].currentActiveButton != this->buttonID)) {
+        this->buttonLightOn = false;
+        this->buttonOn = false;
+        digitalWrite(ledPinMap[buttonID], buttonLightOn ? HIGH : LOW);
+        Joystick.button(buttonID, buttonOn);
       }
       if (buttonSticky) {
-        attachInterrupt(digitalPinToInterrupt(buttonPinMap[buttonID]), Button::staticHandleInterrupt, RISING);
+        if ((previousCheck < newCheck) &&(previousCheck != newCheck)) {
+          Serial.printf("%i %i : ", previousCheck, newCheck);
+          this->handleInterrupt();
+        }
       } else {
-        attachInterrupt(digitalPinToInterrupt(buttonPinMap[buttonID]), Button::staticHandleInterrupt, CHANGE);
+        if (previousCheck != newCheck) {
+          this->handleInterrupt();
+        }
       }
+      previousCheck = newCheck;
+      elapsedMillis = 0;
     }
 
     void handleInterrupt() {
@@ -79,8 +107,15 @@ class Button {
         buttonOn = !buttonOn;
         buttonLightOn = (buttonLightsUp) & !buttonLightOn;
         digitalWrite(ledPinMap[buttonID], buttonLightOn ? HIGH : LOW);
+        Joystick.button(buttonID, buttonOn);
+      } else {
+        buttonGroups[groupID].currentActiveButton = this->buttonID;
+        buttonOn = buttonGroups[groupID].currentActiveButton == this->buttonID;
+        buttonLightOn = (buttonLightsUp) & buttonGroups[groupID].currentActiveButton == this->buttonID;
+        digitalWrite(ledPinMap[buttonID], buttonLightOn ? HIGH : LOW);
+        Joystick.button(buttonID, buttonOn);
       }
-      Serial.println("Interrupted!");
+      Serial.printf("Button %i pressed\n", buttonID);
     }
 
   private:
@@ -100,6 +135,8 @@ void setup() {
   while (!Serial) {
     // wait for serial port to connect
   }
+  
+  Joystick.useManualSend(true);
 
   Serial.println("\n" __FILE__ " " __DATE__ " " __TIME__);
 
@@ -151,21 +188,30 @@ void loop() {
 
   if (programmingMode) {
     // programming mode code here
+    while(true) {
+      if (Serial.available() > 0) {
+        break;
+      }
+    }
 
-    if ((Serial.available() >= 0) && (uint)Serial.available() <= ((configStructByteLength * 2) + 2 /*add 2 for the two required "/"'s in the programming command*/)) {
+    if ((Serial.available() > 0) && (uint)Serial.available() <= ((configStructByteLength * 2) + 3 /*add 2 for the two required "/"'s in the programming command and 1 for newline operator*/)) {
 
-      if (Serial.available() == 2) {
+      if (Serial.available() == 3) {
         char stringBuffer[2];
         Serial.readBytes(stringBuffer, 2);
 
-        if (strcmp(stringBuffer , "!q")) {
+        Serial.println(stringBuffer);
+
+        if (strcmp(stringBuffer , "!q") == 0) {
           Serial.println("Exiting Programming Mode");
           readFileToConfig(filepath);
           exitProgrammingMode();
-          return;
-        } else if (strcmp(stringBuffer , "q")) {
+          goto skipRestOfLoop;
+        } else if (strcmp(stringBuffer , "wq") == 0) {
           exitProgrammingMode();
-          return;
+          goto skipRestOfLoop;
+        } else {
+          goto skipRestOfLoop;
         }
       }
 
@@ -173,58 +219,83 @@ void loop() {
       char groupIDBuffer[sizeof(configStruct::groupID)];
       char configMaskBuffer[sizeof(configStruct::buttonConfigMask)];
 
-      decltype(configStruct::buttonID) buttonID;
+      Serial.readBytesUntil(0x2F, buttonIDBuffer, (sizeof(configStruct::buttonID) * 2) + 1);
+      Serial.read();
+      Serial.readBytesUntil(0x2F, groupIDBuffer, (sizeof(configStruct::groupID) * 2) + 1);
+      Serial.read();
+      Serial.readBytesUntil(0x0A, configMaskBuffer, (sizeof(configStruct::buttonConfigMask) * 2) + 1);
 
-      Serial.readBytesUntil(0x2F, buttonIDBuffer, sizeof(configStruct::buttonID) + 1); 
-      Serial.readBytesUntil(0x2F, groupIDBuffer, sizeof(configStruct::groupID) + 1);
-      Serial.readBytesUntil(0x0A, configMaskBuffer, sizeof(configStruct::buttonConfigMask)+ 1);
+      // String buttonIDString = Serial.readStringUntil("/", 5);
+      // String groupIDString = Serial.readStringUntil("/", 5);
+      // String configMaskString = Serial.readStringUntil(0x0A, 5);
 
-      sscanf(buttonIDBuffer, "%x", &buttonID);
-      sscanf(groupIDBuffer, "%x", &(config[buttonID].groupID));
-      sscanf(configMaskBuffer, "%x", &(config[buttonID].buttonConfigMask));
+      // Serial.println(buttonIDString);
+      // Serial.println(groupIDString);
+      // Serial.println(configMaskString);
+
+
+      decltype(configStruct::buttonID) buttonID = hexStringToInt(buttonIDBuffer, sizeof(buttonIDBuffer), sizeof(configStruct::buttonID));
+      Serial.printf("buttonID: %x\n", buttonID);
+      config[buttonID].groupID = hexStringToInt(groupIDBuffer, sizeof(groupIDBuffer), sizeof(configStruct::groupID));
+      Serial.printf("groupID: %x\n", config[buttonID].groupID);
+      config[buttonID].buttonConfigMask = hexStringToInt(configMaskBuffer, sizeof(configMaskBuffer), sizeof(configStruct::buttonConfigMask));
+      Serial.printf("config: %x\n", config[buttonID].buttonConfigMask);
     }
     
   } else {
+
+    for (int i = 0; i < numberOfPossibleButtons; i++) {
+      buttons[i].checkForInterrupts();
+    }
+
     if (Serial.available() == 0) {
-      interrupts();
-      return;
+      goto skipRestOfLoop;
     }
 
     if (Serial.available() > 4) {
       Serial.print("Too many characters in command");
-      return;
+      goto skipRestOfLoop;
     }
-
-    noInterrupts();
 
     if (Serial.read() == 0x2F) {              // checking for "/" to start reading command
       switch (Serial.read()) {
         case -1:                              // checking for empty buffer, which means no command was input past "/"
 
           Serial.println("invalid input");
-          return;
+          break;
 
         case 0x48:                            // checking for lowercase "h"
         case 0x68:                            // chacking for uppercase "H"
           // print list of commands here
           break;
 
-        case 0x50:
-        case 0x70:
-          programmingMode = true;
+        case 0x50:                            // checking for lowercase "p"
+        case 0x70:                            // checking for uppercase "P"
+          programmingMode = true; 
+          Serial.println("Programming Mode Acitivated");
+          Serial.println("Proceed with caution");
+          break;
+        case 0x52:                            // checking for lowercase "r"
+        case 0x72:                            // checking for lowercase "R"
+          Serial.println("rebooting now");
+
           break;
       }
     }
   }
-
+  skipRestOfLoop:
+  Serial.clear();
 }
 
 void exitProgrammingMode() {
+  Serial.println("exiting Programming mode");
   writeToConfigFile(filepath, config);
   programmingMode = false;
+  interrupts();
 }
 
 void writeToConfigFile(const char* fileName, configStruct config[]) {
+  SD.remove(fileName);
   File file = SD.open(fileName, FILE_WRITE);
 
   uint8_t buffer[numberOfPossibleButtons * configStructByteLength];
@@ -306,4 +377,38 @@ void initializeConfigIDs() {
   for (decltype(configStruct::buttonID) i = 0; i < numberOfPossibleButtons; i++) {
     config[i].buttonID = i;
   }
+}
+
+uint hexStringToInt(char* buffer, uint8_t bufferLength, uint8_t sizeOfResult) {
+  uint intResult = 0;
+  for (int i = 0; i < bufferLength * 2; i++) {
+    Serial.printf("%x ", buffer[i]);
+    Serial.printf("Amount to shift = %d ", (4 * ((sizeOfResult * 2) - i - 1)));
+    switch (buffer[i]) {
+      case 0x30: intResult ^= 0; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x31: intResult ^= 1; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x32: intResult ^= 2; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x33: intResult ^= 3; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x34: intResult ^= 4; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x35: intResult ^= 5; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x36: intResult ^= 6; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x37: intResult ^= 7; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x38: intResult ^= 8; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x39: intResult ^= 9; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x61:
+      case 0x41: intResult ^= 10; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x62:
+      case 0x42: intResult ^= 11; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x63:
+      case 0x43: intResult ^= 12; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x64:
+      case 0x44: intResult ^= 13; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x65:
+      case 0x45: intResult ^= 14; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+      case 0x66:
+      case 0x46: intResult ^= 15; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
+    }
+    Serial.printf("%x\n", intResult);
+  }
+  return intResult;
 }
