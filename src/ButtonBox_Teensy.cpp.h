@@ -48,7 +48,7 @@ class Button {
     bool buttonOn;
     bool buttonLightOn;
     int previousCheck = LOW;
-    elapsedMillis elapsedMillis = 0;
+    elapsedMillis millis = 0;
 
     void begin() {
       pinMode(ledPinMap[buttonID], OUTPUT);
@@ -64,7 +64,7 @@ class Button {
     }
 
     void checkForInterrupts() {
-      if (elapsedMillis < 15) {
+      if (millis < 15) {
         return;
       }
       int newCheck = digitalRead(buttonPinMap[buttonID]);
@@ -85,7 +85,7 @@ class Button {
         }
       }
       previousCheck = newCheck;
-      elapsedMillis = 0;
+      millis = 0;
     }
 
     void handleInterrupt() {
@@ -96,14 +96,13 @@ class Button {
         buttonOn = !buttonOn;
         buttonLightOn = (buttonLightsUp) & !buttonLightOn;
         digitalWrite(ledPinMap[buttonID], buttonLightOn ? HIGH : LOW);
-        Joystick.button(buttonID, buttonOn);
       } else {
         buttonGroups[groupID].currentActiveButton = this->buttonID;
         buttonOn = buttonGroups[groupID].currentActiveButton == this->buttonID;
-        buttonLightOn = (buttonLightsUp) & buttonGroups[groupID].currentActiveButton == this->buttonID;
+        buttonLightOn = ((buttonLightsUp) & buttonGroups[groupID].currentActiveButton) == this->buttonID;
         digitalWrite(ledPinMap[buttonID], buttonLightOn ? HIGH : LOW);
-        Joystick.button(buttonID, buttonOn);
       }
+      Joystick.button(buttonID, buttonOn);
       Serial.printf("Button %i pressed\n", buttonID);
     }
 
@@ -125,4 +124,6 @@ void readFileToConfig(const char * filepath);
 
 void exitProgrammingMode();
 
-decltype(configStruct::buttonID) hexStringToInt(char * str, size_t size, size_t size1);
+decltype(configStruct::buttonID) hexStringToInt(char* buffer, uint8_t bufferLength, uint8_t sizeOfResult);
+
+void testButton(decltype(configStruct::groupID) buttonID);

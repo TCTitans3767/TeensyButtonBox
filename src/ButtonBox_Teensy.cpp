@@ -21,13 +21,18 @@ bool programmingMode = false;
 */
 
 Button* Button::_instance = nullptr;
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
+  elapsedMillis waitForSerial = 0;
   while (!Serial) {
     // wait for serial port to connect
+    if (waitForSerial > 2000) {
+      break;
+    }
   }
-  
+
   Joystick.useManualSend(true);
 
   Serial.println("\n" __FILE__ " " __DATE__ " " __TIME__);
@@ -82,15 +87,15 @@ void loop() {
 
   if (programmingMode) {
     // programming mode code here
-    while(true) {
-      if (Serial.available() > 0) {
-        break;
-      }
-    }
+    // while(true) {
+    //   if (Serial.available() > 0) {
+    //     break;
+    //   }
+    // }
 
-    if ((Serial.available() > 0) && (uint)Serial.available() <= ((configStructByteLength * 2) + 3 /*add 2 for the two required "/"'s in the programming command and 1 for newline operator*/)) {
+    if ((Serial.available() > 0) && (uint)Serial.available() <= ((configStructByteLength * 2) + 4 /*add 2 for the two required "/"'s in the programming command and 1 for newline operator*/)) {
 
-      if (Serial.available() == 3) {
+      if (Serial.available() == 4) {
         char stringBuffer[2];
         Serial.readBytes(stringBuffer, 2);
 
@@ -146,7 +151,7 @@ void loop() {
       goto skipRestOfLoop;
     }
 
-    if (Serial.available() > 4) {
+    if (Serial.available() > 5) {
       Serial.print("Too many characters in command");
       goto skipRestOfLoop;
     }
@@ -173,6 +178,29 @@ void loop() {
         case 0x72:                            // checking for lowercase "R"
           Serial.println("rebooting now");
 
+          break;
+        case 0x42:                            // checking for uppercase "B"
+        case 0x62:                            // checking for lowercase "b"
+          if (Serial.available() >=1) {
+            switch (Serial.read()) {
+              case 0x42:                      // uppercase "B"
+              case 0x62:                      // lowercase "b"
+                Serial.printf("%i\n", sizeof(configStruct::buttonID));
+                break;
+              case 0x47:                      // uppercase "G"
+              case 0x67:                      // lowercase "g"
+                Serial.printf("%i\n", sizeof(configStruct::groupID));
+                break;
+              default:
+                break;
+            }
+          }
+          break;
+        case 0x54:                            // checking for uppercase "T"
+        case 0x74:                            // checking for lowercase "t"
+          decltype(configStruct::buttonID) buttonToTest = Serial.read() - 0x30; // converting ascii number to integer value
+          Serial.printf("testing button %i\n", buttonToTest);
+          testButton(buttonToTest); // converting ascii number to integer value
           break;
       }
     }
@@ -273,11 +301,11 @@ void initializeConfigIDs() {
   }
 }
 
-uint hexStringToInt(char* buffer, uint8_t bufferLength, uint8_t sizeOfResult) {
+decltype(configStruct::buttonID) hexStringToInt(char* buffer, uint8_t bufferLength, uint8_t sizeOfResult) {
   uint intResult = 0;
   for (int i = 0; i < bufferLength * 2; i++) {
-    Serial.printf("%x ", buffer[i]);
-    Serial.printf("Amount to shift = %d ", (4 * ((sizeOfResult * 2) - i - 1)));
+    // Serial.printf("%x ", buffer[i]);
+    // Serial.printf("Amount to shift = %d ", (4 * ((sizeOfResult * 2) - i - 1)));
     switch (buffer[i]) {
       case 0x30: intResult ^= 0; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
       case 0x31: intResult ^= 1; intResult <<= (4 * ((sizeOfResult * 2) - i - 1)); break;
@@ -305,4 +333,27 @@ uint hexStringToInt(char* buffer, uint8_t bufferLength, uint8_t sizeOfResult) {
     Serial.printf("%x\n", intResult);
   }
   return intResult;
+}
+
+void testButton(decltype(configStruct::buttonID) buttonID) {
+  Button button = buttons[buttonID];
+  bool buttonState = button.buttonOn;
+  bool lightState = button.buttonLightOn;
+  bool buttonActiveState = button.buttonActive;
+
+  button.buttonOn = false;
+  button.buttonLightOn = false;
+  button.buttonActive = false;
+
+  for (int i = 0; i < 40; i++) {
+    button.buttonLightOn = !button.buttonLightOn;
+    digitalWrite(ledPinMap[button.buttonID], button.buttonLightOn);
+    delay(100);
+  }
+
+  button.buttonOn = buttonState;
+  button.buttonLightOn = lightState;
+  button.buttonActive = buttonActiveState;
+  digitalWrite(ledPinMap[buttonID], lightState);
+  Serial.println("test complete");
 }
